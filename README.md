@@ -1,4 +1,4 @@
-# 📘 Attention-based Seq2Seq Time Series Forecasting (Multivariate)
+# Attention-based Seq2Seq Time Series Forecasting (Multivariate)
 
 This project implements a **multivariate time series forecasting system** using:
 
@@ -12,7 +12,7 @@ The goal is to demonstrate how attention improves interpretability and forecasti
 
 ---
 
-## 🧠 1. Project Motivation
+## 1. Project Motivation
 
 Real-world time series data often contain:
 - Multiple correlated features  
@@ -24,7 +24,7 @@ Seq2Seq + Attention **learns which specific timesteps matter**, improving foreca
 
 ---
 
-## 🏗️ 2. Model Architectures
+## 2. Model Architectures
 
 ### **Baseline LSTM**
 - Single LSTM layer  
@@ -46,7 +46,7 @@ Seq2Seq + Attention **learns which specific timesteps matter**, improving foreca
 
 ---
 
-## 🧪 3. Hyperparameter Tuning Strategy (Required)
+## 3. Hyperparameter Tuning Strategy (Required)
 
 A structured grid search was performed:
 
@@ -72,7 +72,7 @@ These showed the best balance of stability + accuracy.
 
 ---
 
-## 🔎 4. Attention Weight Interpretation (Required)
+## 4. Attention Weight Interpretation (Required)
 
 The attention distribution reveals which past timesteps had the strongest influence on the predicted value.
 
@@ -89,7 +89,7 @@ This interpretability is impossible with a normal LSTM.
 
 ---
 
-## 📊 5. Baseline vs Attention Model Results
+## 5. Baseline vs Attention Model Results
 
 Replace the numbers below with actual output after your run:
 
@@ -105,7 +105,7 @@ Expected outcome:
 
 ---
 
-## ▶️ 6. How to Run
+## 6. How to Run
 
 
 This will:
@@ -116,11 +116,11 @@ This will:
 
 ---
 
-## 📁 7. Project Structure
+## 7. Project Structure
 
 
 ---
 
-## 👤 Author  
+## Author  
 **Thilagan D**  
 Multivariate Forecasting with Attention Mechanisms
