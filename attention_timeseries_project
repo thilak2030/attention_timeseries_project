@@ -1,0 +1,248 @@
+"""
+Single File Project: Multivariate Time Series Forecasting using
+Seq2Seq + Attention (PyTorch)
+
+THIS FILE INCLUDES:
+1. Synthetic VAR-based dataset (5 features + 1 target)
+2. Scaling + Sliding Window
+3. Train/Val/Test split
+4. Baseline LSTM
+5. Seq2Seq Encoder–Decoder with Attention
+6. Training + Evaluation (RMSE/MAE/MAPE)
+7. Attention weight visualization
+
+Just run:
+    python attention_timeseries_project.py
+"""
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from sklearn.preprocessing import MinMaxScaler
+import matplotlib.pyplot as plt
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+from statsmodels.tsa.vector_ar.var_model import VAR
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# -----------------------------------------------------
+# 1. Generate Synthetic VAR Dataset
+# -----------------------------------------------------
+def generate_dataset(n_steps=1000):
+    np.random.seed(0)
+
+    # Create 5 correlated features using VAR model
+    data = np.random.randn(200, 5)
+    model = VAR(data)
+    fitted = model.fit(2)
+    generated = fitted.simulate_var(n_steps)
+
+    # Add target = weighted sum + noise
+    target = (
+        0.3 * generated[:, 0]
+        + 0.2 * generated[:, 1]
+        - 0.1 * generated[:, 2]
+        + 0.4 * generated[:, 3]
+        + np.random.randn(n_steps) * 0.05
+    )
+
+    full_data = np.column_stack([generated, target])
+    return full_data
+
+
+# -----------------------------------------------------
+# 2. Normalization + Sequence Windowing
+# -----------------------------------------------------
+def create_windows(data, lookback=20):
+    X, y = [], []
+    for i in range(len(data) - lookback):
+        X.append(data[i:i+lookback, :-1])
+        y.append(data[i+lookback, -1])
+    return np.array(X), np.array(y)
+
+
+# -----------------------------------------------------
+# 3. PyTorch Dataset
+# -----------------------------------------------------
+class TSData(torch.utils.data.Dataset):
+    def __init__(self, X, y):
+        self.X = torch.tensor(X, dtype=torch.float32)
+        self.y = torch.tensor(y, dtype=torch.float32)
+
+    def __len__(self):
+        return len(self.X)
+
+    def __getitem__(self, i):
+        return self.X[i], self.y[i]
+
+
+# -----------------------------------------------------
+# Baseline LSTM
+# -----------------------------------------------------
+class BaselineLSTM(nn.Module):
+    def __init__(self, n_features, hidden=64):
+        super().__init__()
+        self.lstm = nn.LSTM(n_features, hidden, batch_first=True)
+        self.fc = nn.Linear(hidden, 1)
+
+    def forward(self, x):
+        _, (h, _) = self.lstm(x)
+        return self.fc(h[-1])
+
+
+# -----------------------------------------------------
+# Seq2Seq + Attention
+# -----------------------------------------------------
+class Encoder(nn.Module):
+    def __init__(self, n_features, hidden=64):
+        super().__init__()
+        self.lstm = nn.LSTM(n_features, hidden, batch_first=True)
+
+    def forward(self, x):
+        outputs, hidden = self.lstm(x)
+        return outputs, hidden
+
+
+class Attention(nn.Module):
+    def __init__(self, hidden):
+        super().__init__()
+        self.W1 = nn.Linear(hidden, hidden)
+        self.W2 = nn.Linear(hidden, hidden)
+        self.v = nn.Linear(hidden, 1)
+
+    def forward(self, dec_hidden, enc_outputs):
+        dec = dec_hidden[-1].unsqueeze(1)
+        score = self.v(torch.tanh(self.W1(enc_outputs) + self.W2(dec)))
+        attn = torch.softmax(score, dim=1)
+        context = (attn * enc_outputs).sum(dim=1)
+        return context, attn.squeeze(-1)
+
+
+class Decoder(nn.Module):
+    def __init__(self, hidden=64):
+        super().__init__()
+        self.fc = nn.Linear(hidden, 1)
+
+    def forward(self, context):
+        return self.fc(context)
+
+
+class Seq2SeqAttention(nn.Module):
+    def __init__(self, n_features, hidden=64):
+        super().__init__()
+        self.encoder = Encoder(n_features, hidden)
+        self.attn = Attention(hidden)
+        self.decoder = Decoder(hidden)
+
+    def forward(self, x):
+        enc_out, hidden = self.encoder(x)
+        context, attn = self.attn(hidden[0], enc_out)
+        out = self.decoder(context)
+        return out, attn
+
+
+# -----------------------------------------------------
+# Train Function
+# -----------------------------------------------------
+def train_model(model, loader, epochs=5):
+    model.train()
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+    for ep in range(epochs):
+        total_loss = 0
+        for X, y in loader:
+            X, y = X.to(DEVICE), y.to(DEVICE).unsqueeze(1)
+
+            pred = model(X)[0] if isinstance(model, Seq2SeqAttention) else model(X)
+            loss = criterion(pred, y)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+
+        print(f"Epoch {ep+1} | Loss = {total_loss:.4f}")
+
+
+# -----------------------------------------------------
+# Evaluate
+# -----------------------------------------------------
+def evaluate_model(model, X, y):
+    model.eval()
+    X = torch.tensor(X, dtype=torch.float32).to(DEVICE)
+    with torch.no_grad():
+        if isinstance(model, Seq2SeqAttention):
+            preds = model(X)[0].cpu().numpy().flatten()
+        else:
+            preds = model(X).cpu().detach().numpy().flatten()
+
+    rmse = np.sqrt(mean_squared_error(y, preds))
+    mae = mean_absolute_error(y, preds)
+    mape = np.mean(np.abs((y - preds) / y)) * 100
+
+    return rmse, mae, mape, preds
+
+
+# -----------------------------------------------------
+# Main
+# -----------------------------------------------------
+def main():
+    print("Generating dataset...")
+    data = generate_dataset(1200)
+
+    # Scale
+    scaler = MinMaxScaler()
+    data = scaler.fit_transform(data)
+
+    X, y = create_windows(data, 20)
+
+    # Split: 70/15/15
+    n = len(X)
+    train_end = int(n * 0.7)
+    val_end = int(n * 0.85)
+
+    X_train, y_train = X[:train_end], y[:train_end]
+    X_val, y_val     = X[train_end:val_end], y[train_end:val_end]
+    X_test, y_test   = X[val_end:], y[val_end:]
+
+    train_loader = torch.utils.data.DataLoader(
+        TSData(X_train, y_train), batch_size=32, shuffle=True
+    )
+
+    n_features = X.shape[2]
+
+    # Baseline ---------------------------
+    print("\nTraining Baseline LSTM...")
+    base = BaselineLSTM(n_features).to(DEVICE)
+    train_model(base, train_loader, epochs=5)
+
+    print("\nEvaluating Baseline LSTM...")
+    rmse, mae, mape, base_preds = evaluate_model(base, X_test, y_test)
+    print(f"Baseline → RMSE={rmse:.4f}, MAE={mae:.4f}, MAPE={mape:.2f}%")
+
+    # Seq2Seq + Attention ----------------
+    print("\nTraining Seq2Seq + Attention...")
+    att_model = Seq2SeqAttention(n_features).to(DEVICE)
+    train_model(att_model, train_loader, epochs=5)
+
+    print("\nEvaluating Attention Model...")
+    rmse, mae, mape, att_preds = evaluate_model(att_model, X_test, y_test)
+    print(f"Attention → RMSE={rmse:.4f}, MAE={mae:.4f}, MAPE={mape:.2f}%")
+
+    # Attention visualization
+    print("\nPlotting attention for last batch...")
+    X_last = torch.tensor(X_test[-1:], dtype=torch.float32).to(DEVICE)
+    _, attn_weights = att_model(X_last)
+    attn_weights = attn_weights.detach().cpu().numpy()
+
+    plt.figure(figsize=(10,4))
+    plt.plot(attn_weights)
+    plt.title("Attention Weights (Last Sample)")
+    plt.savefig("attention_weights.png")
+    print("Saved attention_weights.png")
+
+
+if __name__ == "__main__":
+    main()
